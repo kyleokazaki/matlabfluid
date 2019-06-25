@@ -1,0 +1,258 @@
+%Kyle Okazaki
+%MAE M20
+%Final Project
+%This script will model the particles of a fluid using data structures,
+%hash tables, and semi-implicit differentiation. Each particle is given a
+%position, velocity, force, density, mass, and a set of neighbors that is
+%calculated independently every iteration.
+
+clear;
+clc;
+close all;
+
+%%
+%Begin video storing specifications
+vidHandle = VideoWriter('fp_704770600_vid_main', 'MPEG-4');
+vidHandle.FrameRate = 20;
+vidHandle.Quality = 100;
+open(vidHandle);
+
+
+%%
+%Initial conditions
+N = 100;
+rest_dens = 1000;
+kappa = 100;
+mu = 0.15;
+beta = 0.6;
+h = 0.05;
+dt = 0.01;
+
+
+%%
+%Define boundaries of grid and calculations required for hashing
+xMax = 1;
+yMax = 1;
+Nx = floor(xMax/h);
+Ny = floor(yMax/h);
+dx = xMax/Nx;
+dy = yMax/Ny;
+
+NumBins = Nx*Ny;
+binNum = zeros(1,N);
+
+
+%%
+%Define and Utilize "Data Structure"
+particle(1:N) = struct('pos',[],'vel',[],'force',[], ...
+    'rho',[],'mass',[],'neigh',[]);
+
+%Define Positions and Velocities
+for i = 1:N
+    x(i) = .5*xMax*rand; y(i) = .5*yMax*rand+.5;
+    particle(i).pos(1) = x(i);
+    particle(i).pos(2) = y(i);
+    particle(i).rho = rest_dens;
+    particle(i).vel(1) = 0;
+    particle(i).vel(2) = 0;
+    particle(i).mass = rest_dens/N;
+    particle(i).force = [0,0];
+end
+
+%%
+%Identify adjacent bins in hash table
+%This does not change so it only needs to be calculated once
+for i = 1:NumBins
+    numBins = Nx * Ny;
+    bins(1:numBins) = struct('particleIDs', [], 'adjacentBins', []);
+    
+    %Uses neighbor theorem
+    for i = 1:Ny*Nx
+        right = i+Ny;
+        left = i-Ny;
+        top = i-1;
+        bottom = i+1;
+        topright = i+Ny-1;
+        bottomright = i+Ny+1;
+        topleft = i-Ny-1;
+        bottomleft = i-Ny+1;
+        
+        % Determine if not on left wall
+        if i > Ny
+            bins(i).adjacentBins = [bins(i).adjacentBins, left];
+            if mod(i,Ny) ~= 1
+                bins(i).adjacentBins = [bins(i).adjacentBins, topleft];
+            end
+            if mod(i,Ny) ~= 0
+                bins(i).adjacentBins = [bins(i).adjacentBins, bottomleft];
+            end
+        end
+        
+        % Determine if not on the right wall
+        if i <= Ny*(Nx-1)
+            bins(i).adjacentBins = [bins(i).adjacentBins, right];
+            if mod(i,Ny) ~= 1
+                bins(i).adjacentBins = [bins(i).adjacentBins, topright];
+            end
+            if mod(i,Ny) ~= 0
+                bins(i).adjacentBins = [bins(i).adjacentBins, bottomright];
+            end
+        end
+        
+        if mod(i,Ny) ~= 0
+            bins(i).adjacentBins = [bins(i).adjacentBins, bottom];
+        end
+        
+        if mod(i,Ny) ~= 1
+            bins(i).adjacentBins = [bins(i).adjacentBins, top];
+        end
+    end
+    
+end
+
+%%
+%Initiate Simulation with Time
+for t = 1:150
+    %reset the particles in each bin for each iteration
+    for i = 1:Nx*Ny
+        bins(i).particleIDs = [];
+    end
+    for i = 1:N
+        particle(i).neigh = [];
+    end
+    
+    %Calculate the particles in each bin
+    for i = 1:NumBins
+        for j = 1:N
+            binNum = (ceil(particle(j).pos(1)/dx) - 1)*Ny + ...
+                ceil((yMax - particle(j).pos(2))/dy);
+            if binNum == i
+                bins(i).particleIDs = [bins(i).particleIDs, j];
+            end
+        end
+    end
+    
+    %Identify neighbors of current particle for all particles
+    for i = 1:NumBins
+        if bins(i).particleIDs ~= 0
+            bin_w = [];
+            for j = [i, bins(i).adjacentBins]
+                for v = 1:N
+                    %sorts each particle into a bin
+                    binNum = (ceil(particle(v).pos(1)/dx) - 1)*Ny...
+                        + ceil((yMax - particle(v).pos(2))/dy);
+                    if binNum == j
+                        %gathers all of the particles in a bin into one
+                        %structure
+                        [bin_w] = [bin_w, v];
+                    end
+                end
+            end
+            
+            for k = [bins(i).particleIDs]
+                for l = bin_w
+                    dist = sqrt((particle(k).pos(1)...
+                        - particle(k).pos(1))^2 + (particle(k).pos(2)...
+                        - particle(k).pos(2))^2);
+                    %you may also change the radius at which particles will
+                    %affect each other
+                    if dist < h && k ~= l %dist is usually h
+                        particle(k).neigh = [particle(k).neigh, l];
+                    end
+                end
+            end
+        end
+    end
+    
+    %Calculate Densities
+    for i = 1:N
+        density_x = 0;
+        density_y = 0;
+        density = 4*particle(i).mass/(3.14*(h^2));
+        
+        for j = 1:length(particle(i).neigh)
+            current_neigh = particle(i).neigh(j);
+            density_x = (particle(i).pos(1)-particle(current_neigh).pos(1));
+            density_y = (particle(i).pos(2)-particle(current_neigh).pos(2));
+            density_tot = sqrt(density_x^2+density_y^2);
+            density= density...
+                + (4*particle(i).mass/(3.14*(h^8)))*abs(((h^2)-density_tot)^3);
+            
+        end
+        particle(i).rho = density;
+    end
+    
+    %Calculate Forces
+    for i = 1:N
+        force_x = 0;
+        force_y = 0;
+        %change the forcing terms here like adding wind
+        %Gravity is the only external force shown
+        forcetot_x = 0; %(i*particle(i).rho) for wind
+        forcetot_y = -9.8*particle(i).rho;
+        
+        for w = 1:length(particle(i).neigh)
+            j = particle(i).neigh(w);
+            q = sqrt((particle(i).pos(1)-particle(j).pos(1))^2 ...
+                +(particle(i).pos(2)-particle(j).pos(2))^2)/h;
+            force_x1 = 15*kappa*(particle(i).rho+particle(j).rho ...
+                -2*rest_dens)*(1-q)/q*(particle(i).pos(1)-particle(j).pos(1));
+            force_x2 = -40*mu*(particle(i).vel(1)-particle(j).vel(1));
+            force_y1 = 15*kappa*(particle(i).rho+particle(j).rho ...
+                -2*rest_dens)*(1-q)/q*(particle(i).pos(2)-particle(j).pos(2));
+            force_y2 = -40*mu*(particle(i).vel(2)-particle(j).vel(2));
+            force_x3 = force_x1 + force_x2;
+            force_y3 = force_y1 + force_y2;
+            force_x = force_x + j/(pi*h^4*particle(j).rho)*(1-q)*force_x3;
+            force_y = force_y + j/(pi*h^4*particle(j).rho)*(1-q)*force_y3;
+        end
+        
+        particle(i).force(1) = 3*(forcetot_x + force_x);
+        particle(i).force(2) = (forcetot_y + force_y);
+    end
+    
+    %Update Kinematics
+    for i = 1:N
+        particle(i).vel(1) = particle(i).vel(1) + ...
+            dt*particle(i).force(1)/particle(i).rho;
+        particle(i).vel(2) = particle(i).vel(2) +  ...
+            dt*particle(i).force(2)/particle(i).rho;
+        particle(i).pos(1) = particle(i).pos(1) + dt*particle(i).vel(1);
+        particle(i).pos(2) = particle(i).pos(2) + dt*particle(i).vel(2);
+        %damping constant may be changed at the beginning of the script
+        if particle(i).pos(1) >= xMax
+            particle(i).pos(1) = 2*xMax - particle(i).pos(1);
+            particle(i).vel(1) = -beta*particle(i).vel(1);
+        end
+        if particle(i).pos(2) >= yMax
+            particle(i).pos(2) = 2*yMax - particle(i).pos(2);
+            particle(i).vel(2) = -beta*particle(i).vel(2);
+        end
+        if particle(i).pos(1) <= 0
+            particle(i).pos(1) = -particle(i).pos(1);
+            particle(i).vel(1) = -beta*particle(i).vel(1);
+        end
+        
+        if particle(i).pos(2) <= 0
+            particle(i).pos(2) = -particle(i).pos(2);
+            particle(i).vel(2) = -beta*particle(i).vel(2);
+        end
+        
+    end
+    
+    %remap positions of particles to plot easier
+    x = zeros(1,N);
+    y = zeros(1,N);
+    for i = 1:N
+        x(i) = particle(i).pos(1);
+        y(i) = particle(i).pos(2);
+    end
+    
+    scatter(x,y);
+    axis([0 xMax 0 yMax])
+    drawnow;
+    writeVideo(vidHandle, getframe(gcf));
+    
+end
+
+close(vidHandle);
